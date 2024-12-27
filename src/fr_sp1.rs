@@ -77,19 +77,21 @@ impl Fr {
         CtOption::new(Fr(tmp), Choice::from(1))
     }
 
-    pub fn mul(&self, rhs: &Self) -> Fr {
-        let mut result = Fr::zero();
-        unsafe {
-            syscall_bn254_scalar_muladd(&mut result.0, &self.0, &rhs.0, &Fr::zero().0);
-        }
+    pub fn add(&self, rhs: &Self) -> Fr {
+        let mut result = *self;
+        result += rhs;
         result
     }
 
-    pub fn add(&self, rhs: &Self) -> Fr {
+    pub fn sub(&self, rhs: &Self) -> Fr {
         let mut result = *self;
-        unsafe {
-            syscall_bn254_scalar_mac(&mut result.0, rhs, &ONE);
-        }
+        result -= rhs;
+        result
+    }
+
+    pub fn mul(&self, rhs: &Self) -> Fr {
+        let mut result = *self;
+        result *= rhs;
         result
     }
 
@@ -109,9 +111,7 @@ impl_sum_prod!(Fr);
 impl AddAssign<Fr> for Fr {
     #[inline]
     fn add_assign(&mut self, rhs: Fr) {
-        unsafe {
-            syscall_bn254_scalar_mac(&mut self.0, &rhs, &ONE);
-        }
+        self.add_assign(&rhs)
     }
 }
 
@@ -127,11 +127,7 @@ impl<'a> AddAssign<&'a Fr> for Fr {
 impl SubAssign<Fr> for Fr {
     #[inline]
     fn sub_assign(&mut self, rhs: Fr) {
-        let mut tmp = rhs;
-        tmp.negate();
-        unsafe {
-            syscall_bn254_scalar_mac(&mut self.0, &tmp, &ONE);
-        }
+        self.sub_assign(&rhs)
     }
 }
 
@@ -149,11 +145,7 @@ impl<'a> SubAssign<&'a Fr> for Fr {
 impl MulAssign<Fr> for Fr {
     #[inline]
     fn mul_assign(&mut self, rhs: Fr) {
-        unsafe {
-            let tmp = *self;
-            *self = Fr::zero();
-            syscall_bn254_scalar_muladd(&mut self.0, &tmp.0, &rhs.0, &Fr::zero().0);
-        }
+        self.mul_assign(&rhs)
     }
 }
 

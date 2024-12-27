@@ -3,7 +3,7 @@ use crate::{
     impl_binops_multiplicative_mixed, impl_sub_binop_specify_output, impl_sum_prod,
 };
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use ff::{FromUniformBytes, PrimeField};  
+use ff::{Field, FromUniformBytes, PrimeField};
 use rand::RngCore;
 use sp1_intrinsics::{
     bn254::{syscall_bn254_scalar_mul, syscall_bn254_scalar_mac, syscall_bn254_scalar_muladd},
@@ -180,7 +180,7 @@ impl From<u64> for Fr {
     }
 }
 
-impl ff::Field for Fr {
+impl Field for Fr {
     const ZERO: Self = Self::zero();
     const ONE: Self = Self::one();
 

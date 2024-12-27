@@ -1,3 +1,5 @@
+use ff::Field;
+
 #[macro_export]
 macro_rules! impl_add_binop_specify_output {
     ($lhs:ty, $rhs:ty, $output:ty) => {
@@ -120,25 +122,25 @@ macro_rules! impl_sum_prod {
     ($type:ty) => {
         impl ::core::iter::Sum for $type {
             fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-                iter.fold(Self::ZERO, |acc, item| acc + item)
+                iter.fold(<$type as Field>::ZERO, |acc, item| acc + item)
             }
         }
 
         impl<'a> ::core::iter::Sum<&'a $type> for $type {
             fn sum<I: Iterator<Item = &'a $type>>(iter: I) -> Self {
-                iter.fold(Self::ZERO, |acc, item| acc + *item)
+                iter.fold(<$type as Field>::ZERO, |acc, item| acc + *item)
             }
         }
 
         impl ::core::iter::Product for $type {
             fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-                iter.fold(Self::ONE, |acc, item| acc * item)
+                iter.fold(<$type as Field>::ONE, |acc, item| acc * item)
             }
         }
 
         impl<'a> ::core::iter::Product<&'a $type> for $type {
             fn product<I: Iterator<Item = &'a $type>>(iter: I) -> Self {
-                iter.fold(Self::ONE, |acc, item| acc * *item)
+                iter.fold(<$type as Field>::ONE, |acc, item| acc * *item)
             }
         }
     };

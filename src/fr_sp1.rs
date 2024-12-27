@@ -48,12 +48,6 @@ const DELTA: Fr = Fr([
     0x64ec26aa, 0xd4c86e71, 0x09226b6e, 0x22c6f0ca,
 ]);
 
-static ONE: Fr = Fr::one();
-static NEG_ONE: Fr = Fr([
-    0x0fffffff, 0x43e1f593, 0x79b97091, 0x2833e848,
-    0x8181585d, 0xb85045b6, 0xe131a029, 0x30644e72,
-]);
-
 impl Fr {
     #[inline]
     pub const fn zero() -> Self {
@@ -63,6 +57,20 @@ impl Fr {
     #[inline]
     pub const fn one() -> Self {
         Fr([1, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    #[inline]
+    pub const fn from_raw(raw: [u64; 4]) -> Self {
+        let mut tmp = [0u32; 8];
+        tmp[0] = raw[0] as u32;
+        tmp[1] = (raw[0] >> 32) as u32;
+        tmp[2] = raw[1] as u32;
+        tmp[3] = (raw[1] >> 32) as u32;
+        tmp[4] = raw[2] as u32;
+        tmp[5] = (raw[2] >> 32) as u32;
+        tmp[6] = raw[3] as u32;
+        tmp[7] = (raw[3] >> 32) as u32;
+        Fr(tmp)
     }
 
     pub const fn size() -> usize {
@@ -95,10 +103,14 @@ impl Fr {
         result
     }
 
+    pub fn square(&self) -> Fr {
+        self.mul(self)
+    }
+
     pub fn negate(&mut self) {
         unsafe {
             let mut tmp = Fr::zero();
-            syscall_bn254_scalar_muladd(&mut tmp.0, &self.0, &NEG_ONE.0, &Fr::zero().0);
+            syscall_bn254_scalar_muladd(&mut tmp.0, &self.0, &[-1i32 as u32; 8], &Fr::zero().0);
             *self = tmp;
         }
     }
@@ -173,10 +185,7 @@ impl Neg for Fr {
 
 impl From<u64> for Fr {
     fn from(value: u64) -> Self {
-        let mut ret = Fr::zero();
-        ret.0[0] = value as u32;
-        ret.0[1] = (value >> 32) as u32;
-        ret
+        Fr::from_raw([value, 0, 0, 0])
     }
 }
 
@@ -184,19 +193,21 @@ impl Field for Fr {
     const ZERO: Self = Self::zero();
     const ONE: Self = Self::one();
 
-    fn double(&self) -> Fr {
+    fn random(mut rng: impl RngCore) -> Self {
+        let mut bytes = [0u8; 64];
+        rng.fill_bytes(&mut bytes);
+        Self::from_uniform_bytes(&bytes)
+    }
+
+    fn square(&self) -> Self {
+        self.square()
+    }
+
+    fn double(&self) -> Self {
         self.add(self)
     }
 
-    fn square(&self) -> Fr {
-        self.mul(self)  
-    }
-
-    fn random(_rng: impl RngCore) -> Fr {
-        unimplemented!()
-    }
-
-    fn invert(&self) -> CtOption<Fr> {
+    fn invert(&self) -> CtOption<Self> {
         unimplemented!()
     }
 
@@ -205,7 +216,7 @@ impl Field for Fr {
     }
 }
 
-impl ff::PrimeField for Fr {
+impl PrimeField for Fr {
     type Repr = [u8; 32];
 
     const NUM_BITS: u32 = 254;
@@ -236,27 +247,23 @@ impl ff::PrimeField for Fr {
 }
 
 impl FromUniformBytes<64> for Fr {
-    fn from_uniform_bytes(_bytes: &[u8; 64]) -> Self {
-        unimplemented!()
-    }
-}
-
-impl ConstantTimeEq for Fr {
-    fn ct_eq(&self, other: &Self) -> Choice {
-        let mut result = Choice::from(1u8);
-        for i in 0..8 {
-            result &= self.0[i].ct_eq(&other.0[i]);
+    fn from_uniform_bytes(bytes: &[u8; 64]) -> Self {
+        let mut result = Fr::zero();
+        unsafe {
+            syscall_bn254_scalar_from_uniform_bytes(&mut result.0, bytes);
         }
         result
     }
 }
 
+impl ConstantTimeEq for Fr {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        self.0.ct_eq(&other.0)
+    }
+}
+
 impl ConditionallySelectable for Fr {
     fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
-        let mut result = [0u32; 8];
-        for i in 0..8 {
-            result[i] = u32::conditional_select(&a.0[i], &b.0[i], choice);
-        }
-        Fr(result)
+        Fr(u32::conditional_select(&a.0, &b.0, choice))
     }
 }

@@ -2,18 +2,18 @@ use crate::{
     impl_add_binop_specify_output, impl_binops_additive_specify_output,
     impl_binops_multiplicative_mixed, impl_sub_binop_specify_output, impl_sum_prod,
 };
-use core::ops::{Add, Mul, Neg, Sub};
+use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use ff::{FromUniformBytes, PrimeField};  
 use rand::RngCore;
 use sp1_intrinsics::{
-    bn254::syscall_bn254_muladd,
+    bn254::{syscall_bn254_scalar_mul, syscall_bn254_scalar_mac, syscall_bn254_scalar_muladd},
     memory::memcpy32,
 };
 use std::convert::TryInto;
 use std::io::{self, Read, Write};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 #[repr(transparent)]
 pub struct Fr([u32; 8]);
 
@@ -48,12 +48,11 @@ const DELTA: Fr = Fr([
     0x64ec26aa, 0xd4c86e71, 0x09226b6e, 0x22c6f0ca,
 ]);
 
-const ZETA: Fr = Fr([
-    0x8b17ea66, 0xb99c90dd, 0x5bfc4108, 0x8d8daaa7,
-    0xb3c4d79d, 0x41a91758, 0x00, 0x00,
-]);
-
 static ONE: Fr = Fr::one();
+static NEG_ONE: Fr = Fr([
+    0x0fffffff, 0x43e1f593, 0x79b97091, 0x2833e848,
+    0x8181585d, 0xb85045b6, 0xe131a029, 0x30644e72,
+]);
 
 impl Fr {
     #[inline]
@@ -81,7 +80,7 @@ impl Fr {
     pub fn mul(&self, rhs: &Self) -> Fr {
         let mut result = Fr::zero();
         unsafe {
-            syscall_bn254_muladd(&mut result.0, &self.0, &rhs.0);
+            syscall_bn254_scalar_muladd(&mut result.0, &self.0, &rhs.0, &Fr::zero().0);
         }
         result
     }
@@ -89,9 +88,17 @@ impl Fr {
     pub fn add(&self, rhs: &Self) -> Fr {
         let mut result = *self;
         unsafe {
-            syscall_bn254_muladd(&mut result.0, &rhs.0, &ONE.0);
+            syscall_bn254_scalar_mac(&mut result.0, rhs, &ONE);
         }
         result
+    }
+
+    pub fn negate(&mut self) {
+        unsafe {
+            let mut tmp = Fr::zero();
+            syscall_bn254_scalar_muladd(&mut tmp.0, &self.0, &NEG_ONE.0, &Fr::zero().0);
+            *self = tmp;
+        }
     }
 }
 
@@ -99,25 +106,85 @@ impl_binops_additive_specify_output!(Fr, Fr, Fr);
 impl_binops_multiplicative_mixed!(Fr, Fr, Fr);
 impl_sum_prod!(Fr);
 
-// Implement AddAssign
-impl ::core::ops::AddAssign<Fr> for Fr {
+impl AddAssign<Fr> for Fr {
     #[inline]
     fn add_assign(&mut self, rhs: Fr) {
         unsafe {
-            syscall_bn254_muladd(&mut self.0, &rhs.0, &ONE.0);
+            syscall_bn254_scalar_mac(&mut self.0, &rhs, &ONE);
         }
     }
 }
 
-// Implement MulAssign  
-impl core::ops::MulAssign<Fr> for Fr {
+impl<'a> AddAssign<&'a Fr> for Fr {
+    #[inline]
+    fn add_assign(&mut self, rhs: &'a Fr) {
+        unsafe {
+            syscall_bn254_scalar_mac(&mut self.0, rhs, &ONE);
+        }
+    }
+}
+
+impl SubAssign<Fr> for Fr {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Fr) {
+        let mut tmp = rhs;
+        tmp.negate();
+        unsafe {
+            syscall_bn254_scalar_mac(&mut self.0, &tmp, &ONE);
+        }
+    }
+}
+
+impl<'a> SubAssign<&'a Fr> for Fr {
+    #[inline]
+    fn sub_assign(&mut self, rhs: &'a Fr) {
+        let mut tmp = *rhs;
+        tmp.negate();
+        unsafe {
+            syscall_bn254_scalar_mac(&mut self.0, &tmp, &ONE);
+        }
+    }
+}
+
+impl MulAssign<Fr> for Fr {
     #[inline]
     fn mul_assign(&mut self, rhs: Fr) {
-        let tmp = *self;
-        *self = Fr::zero();
         unsafe {
-            syscall_bn254_muladd(&mut self.0, &tmp.0, &rhs.0);
+            let tmp = *self;
+            *self = Fr::zero();
+            syscall_bn254_scalar_muladd(&mut self.0, &tmp.0, &rhs.0, &Fr::zero().0);
         }
+    }
+}
+
+impl<'a> MulAssign<&'a Fr> for Fr {
+    #[inline]
+    fn mul_assign(&mut self, rhs: &'a Fr) {
+        unsafe {
+            let tmp = *self;
+            *self = Fr::zero();
+            syscall_bn254_scalar_muladd(&mut self.0, &tmp.0, &rhs.0, &Fr::zero().0);
+        }
+    }
+}
+
+impl Neg for Fr {
+    type Output = Fr;
+    
+    #[inline]
+    fn neg(self) -> Fr {
+        let mut ret = self;
+        ret.negate();
+        ret
+    }
+}
+
+impl From<u64> for Fr {
+    fn from(value: u64) -> Self {
+        let mut ret = Fr::zero();
+        ret.0[0] = value as u32;
+        ret.0[1] = (value >> 32) as u32;
+        ret
     }
 }
 

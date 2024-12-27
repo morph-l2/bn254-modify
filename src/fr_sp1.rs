@@ -299,20 +299,15 @@ impl ConstantTimeEq for Fr {
 }
 
 impl Field for Fr {
+    const ZERO: Self = Self::zero();
+    const ONE: Self = Self::one();
+
     fn random(mut rng: impl RngCore) -> Self {
         let mut repr = [0u32; 8];
         for r in repr.iter_mut() {
             *r = rng.next_u32();
         }
         Fr(repr)
-    }
-
-    fn zero() -> Self {
-        Fr::zero()
-    }
-
-    fn one() -> Self {
-        Fr::one()
     }
 
     fn square(&self) -> Self {

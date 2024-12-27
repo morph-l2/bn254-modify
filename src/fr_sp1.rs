@@ -1,6 +1,9 @@
 use super::ff::*;
 use core::fmt::{self, Debug, Display};
+use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use rand_core::RngCore;
+use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 
 /// The BN254 scalar field Fr.
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
@@ -15,8 +18,6 @@ impl Fr {
         Fr([1, 0, 0, 0, 0, 0, 0, 0])
     }
 
-    /// Creates a new field element from raw u64 values.
-    /// The values should be in little-endian order.
     pub const fn from_raw(val: [u64; 4]) -> Self {
         let mut tmp = [0u32; 8];
         tmp[0] = val[0] as u32;
@@ -28,6 +29,15 @@ impl Fr {
         tmp[6] = val[3] as u32;
         tmp[7] = (val[3] >> 32) as u32;
         Fr(tmp)
+    }
+
+    #[inline]
+    pub fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
+        let mut res = Self::zero();
+        for i in 0..8 {
+            res.0[i] = u32::conditional_select(&a.0[i], &b.0[i], choice);
+        }
+        res
     }
 }
 
@@ -61,6 +71,33 @@ impl Mul for Fr {
         let mut tmp = self;
         tmp.mul_assign(&rhs);
         tmp
+    }
+}
+
+impl<'a> Add<&'a Fr> for Fr {
+    type Output = Fr;
+    fn add(self, rhs: &'a Fr) -> Fr {
+        let mut res = self;
+        res.add_assign(rhs);
+        res
+    }
+}
+
+impl<'a> Sub<&'a Fr> for Fr {
+    type Output = Fr;
+    fn sub(self, rhs: &'a Fr) -> Fr {
+        let mut res = self;
+        res.sub_assign(rhs);
+        res
+    }
+}
+
+impl<'a> Mul<&'a Fr> for Fr {
+    type Output = Fr;
+    fn mul(self, rhs: &'a Fr) -> Fr {
+        let mut res = self;
+        res.mul_assign(rhs);
+        res
     }
 }
 
@@ -119,6 +156,46 @@ impl MulAssign<Fr> for Fr {
     }
 }
 
+impl Sum for Fr {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        let mut acc = Fr::zero();
+        for x in iter {
+            acc.add_assign(&x);
+        }
+        acc
+    }
+}
+
+impl<'a> Sum<&'a Fr> for Fr {
+    fn sum<I: Iterator<Item = &'a Fr>>(iter: I) -> Self {
+        let mut acc = Fr::zero();
+        for x in iter {
+            acc.add_assign(x);
+        }
+        acc
+    }
+}
+
+impl Product for Fr {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        let mut acc = Fr::one();
+        for x in iter {
+            acc.mul_assign(&x);
+        }
+        acc
+    }
+}
+
+impl<'a> Product<&'a Fr> for Fr {
+    fn product<I: Iterator<Item = &'a Fr>>(iter: I) -> Self {
+        let mut acc = Fr::one();
+        for x in iter {
+            acc.mul_assign(x);
+        }
+        acc
+    }
+}
+
 impl Neg for &Fr {
     type Output = Fr;
 
@@ -141,6 +218,22 @@ impl Neg for Fr {
     #[inline]
     fn neg(self) -> Fr {
         -&self
+    }
+}
+
+impl ConditionallySelectable for Fr {
+    fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
+        Fr::conditional_select(a, b, choice)
+    }
+}
+
+impl ConstantTimeEq for Fr {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        let mut tmp = 0u8;
+        for i in 0..8 {
+            tmp |= (self.0[i] ^ other.0[i]) as u8;
+        }
+        Choice::from((tmp == 0) as u8)
     }
 }
 
@@ -190,28 +283,68 @@ impl Field for Fr {
 }
 
 impl PrimeField for Fr {
-    fn from_repr(repr: [u8; 32]) -> Option<Self> {
+    type Repr = [u8; 32];
+
+    const MODULUS: &'static str = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001";
+    const NUM_BITS: u32 = 254;
+    const CAPACITY: u32 = 253;
+    
+    const TWO_INV: Self = Fr::from_raw([
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+    ]);
+
+    const MULTIPLICATIVE_GENERATOR: Self = Fr::from_raw([2, 0, 0, 0]);
+    
+    const S: u32 = 28;
+    
+    const ROOT_OF_UNITY: Self = Fr::from_raw([
+        0xd35d438dc58f0d9d,
+        0x0a78eb28f5c70b3d,
+        0x666ea36f7879462c,
+        0x0e0a77c19a07df2f,
+    ]);
+    
+    const ROOT_OF_UNITY_INV: Self = Fr::from_raw([
+        0x4dca135978a8016a,
+        0x0559f96e8c0d3308,
+        0xc6695f92b50a8313,
+        0x12c1b6aaf3dd5b7b,
+    ]);
+    
+    const DELTA: Self = Fr::from_raw([
+        0x94575516c2c9b3b2,
+        0x00000001236392ee,
+        0x0000000000000001,
+        0x0000000000000000,
+    ]);
+
+    fn from_repr(repr: Self::Repr) -> Option<Self> {
         let mut tmp = [0u32; 8];
-        for (i, chunk) in repr.chunks(4).enumerate() {
+        for i in 0..8 {
             let mut val = 0u32;
-            for (j, &byte) in chunk.iter().enumerate() {
-                val |= (byte as u32) << (j * 8);
+            for j in 0..4 {
+                val |= (repr[i * 4 + j] as u32) << (j * 8);
             }
             tmp[i] = val;
         }
         Some(Fr(tmp))
     }
 
-    fn to_repr(&self) -> [u8; 32] {
+    fn to_repr(&self) -> Self::Repr {
         let mut res = [0u8; 32];
-        for (i, &val) in self.0.iter().enumerate() {
-            let start = i * 4;
-            res[start] = val as u8;
-            res[start + 1] = (val >> 8) as u8;
-            res[start + 2] = (val >> 16) as u8;
-            res[start + 3] = (val >> 24) as u8;
+        for i in 0..8 {
+            for j in 0..4 {
+                res[i * 4 + j] = (self.0[i] >> (j * 8)) as u8;
+            }
         }
         res
+    }
+
+    fn is_odd(&self) -> Choice {
+        Choice::from((self.0[0] & 1) as u8)
     }
 }
 

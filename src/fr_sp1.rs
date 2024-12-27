@@ -3,7 +3,7 @@ use core::fmt::{self, Debug, Display};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use rand_core::RngCore;
-use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
+use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 /// The BN254 scalar field Fr.
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
@@ -46,8 +46,15 @@ impl Add for Fr {
 
     #[inline]
     fn add(self, rhs: Fr) -> Fr {
-        let mut tmp = self;
-        tmp.add_assign(&rhs);
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &rhs.0,
+            );
+        }
         tmp
     }
 }
@@ -57,8 +64,16 @@ impl Sub for Fr {
 
     #[inline]
     fn sub(self, rhs: Fr) -> Fr {
-        let mut tmp = self;
-        tmp.sub_assign(&rhs);
+        let mut tmp = Fr::zero();
+        let neg_rhs = -rhs;
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &neg_rhs.0,
+            );
+        }
         tmp
     }
 }
@@ -68,8 +83,15 @@ impl Mul for Fr {
 
     #[inline]
     fn mul(self, rhs: Fr) -> Fr {
-        let mut tmp = self;
-        tmp.mul_assign(&rhs);
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &self.0,
+                &rhs.0,
+                &Fr::zero().0,
+            );
+        }
         tmp
     }
 }
@@ -77,27 +99,49 @@ impl Mul for Fr {
 impl<'a> Add<&'a Fr> for Fr {
     type Output = Fr;
     fn add(self, rhs: &'a Fr) -> Fr {
-        let mut res = self;
-        res.add_assign(rhs);
-        res
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &rhs.0,
+            );
+        }
+        tmp
     }
 }
 
 impl<'a> Sub<&'a Fr> for Fr {
     type Output = Fr;
     fn sub(self, rhs: &'a Fr) -> Fr {
-        let mut res = self;
-        res.sub_assign(rhs);
-        res
+        let mut tmp = Fr::zero();
+        let neg_rhs = -rhs;
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &neg_rhs.0,
+            );
+        }
+        tmp
     }
 }
 
 impl<'a> Mul<&'a Fr> for Fr {
     type Output = Fr;
     fn mul(self, rhs: &'a Fr) -> Fr {
-        let mut res = self;
-        res.mul_assign(rhs);
-        res
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &self.0,
+                &rhs.0,
+                &Fr::zero().0,
+            );
+        }
+        tmp
     }
 }
 
@@ -106,7 +150,12 @@ impl AddAssign<&Fr> for Fr {
     fn add_assign(&mut self, rhs: &Fr) {
         let mut tmp = Fr::zero();
         unsafe {
-            sp1_intrinsics::bn254::syscall_bn254_scalar_mac(&mut tmp.0, &rhs.0, &Fr::one().0, &self.0);
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &rhs.0,
+            );
         }
         *self = tmp;
     }
@@ -118,7 +167,12 @@ impl SubAssign<&Fr> for Fr {
         let mut tmp = Fr::zero();
         let neg_rhs = -rhs;
         unsafe {
-            sp1_intrinsics::bn254::syscall_bn254_scalar_mac(&mut tmp.0, &neg_rhs.0, &Fr::one().0, &self.0);
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &Fr::one().0,
+                &self.0,
+                &neg_rhs.0,
+            );
         }
         *self = tmp;
     }
@@ -129,7 +183,12 @@ impl MulAssign<&Fr> for Fr {
     fn mul_assign(&mut self, rhs: &Fr) {
         let mut tmp = Fr::zero();
         unsafe {
-            sp1_intrinsics::bn254::syscall_bn254_scalar_mul(&mut tmp.0, &self.0, &rhs.0);
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &self.0,
+                &rhs.0,
+                &Fr::zero().0,
+            );
         }
         *self = tmp;
     }
@@ -203,10 +262,12 @@ impl Neg for &Fr {
     fn neg(self) -> Fr {
         let mut tmp = Fr::zero();
         unsafe {
-            sp1_intrinsics::bn254::syscall_bn254_scalar_mul(&mut tmp.0, &self.0, &[
-                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-                0xFFFFFFFF,
-            ]);
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &[0xFFFFFFFF; 8],
+                &self.0,
+                &Fr::zero().0,
+            );
         }
         tmp
     }
@@ -237,38 +298,6 @@ impl ConstantTimeEq for Fr {
     }
 }
 
-impl Debug for Fr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Fr([")
-            .and_then(|_| {
-                for (i, val) in self.0.iter().enumerate() {
-                    if i == self.0.len() - 1 {
-                        write!(f, "{:#X}", val)?;
-                    } else {
-                        write!(f, "{:#X}, ", val)?;
-                    }
-                }
-                Ok(())
-            })
-            .and_then(|_| write!(f, "])"))
-    }
-}
-
-impl Display for Fr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl From<u64> for Fr {
-    fn from(val: u64) -> Self {
-        let mut repr = [0u32; 8];
-        repr[0] = val as u32;
-        repr[1] = (val >> 32) as u32;
-        Fr(repr)
-    }
-}
-
 impl Field for Fr {
     fn random(mut rng: impl RngCore) -> Self {
         let mut repr = [0u32; 8];
@@ -278,8 +307,57 @@ impl Field for Fr {
         Fr(repr)
     }
 
-    const ZERO: Self = Fr::zero();
-    const ONE: Self = Fr::one();
+    fn zero() -> Self {
+        Fr::zero()
+    }
+
+    fn one() -> Self {
+        Fr::one()
+    }
+
+    fn square(&self) -> Self {
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &self.0,
+                &self.0,
+                &Fr::zero().0,
+            );
+        }
+        tmp
+    }
+
+    fn double(&self) -> Self {
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &[2, 0, 0, 0, 0, 0, 0, 0],
+                &self.0,
+                &Fr::zero().0,
+            );
+        }
+        tmp
+    }
+
+    fn invert(&self) -> CtOption<Self> {
+        let mut tmp = Fr::zero();
+        unsafe {
+            sp1_intrinsics::bn254::syscall_bn254_scalar_muladd(
+                &mut tmp.0,
+                &[0xFFFFFFFF; 8],
+                &self.0,
+                &Fr::zero().0,
+            );
+        }
+        CtOption::new(tmp, !self.ct_eq(&Fr::zero()))
+    }
+
+    fn sqrt_ratio(_: &Self, _: &Self) -> (Choice, Self) {
+        // TODO: Implement proper sqrt_ratio
+        (Choice::from(1u8), Fr::one())
+    }
 }
 
 impl PrimeField for Fr {
@@ -321,7 +399,7 @@ impl PrimeField for Fr {
         0x0000000000000000,
     ]);
 
-    fn from_repr(repr: Self::Repr) -> Option<Self> {
+    fn from_repr(repr: Self::Repr) -> CtOption<Self> {
         let mut tmp = [0u32; 8];
         for i in 0..8 {
             let mut val = 0u32;
@@ -330,7 +408,7 @@ impl PrimeField for Fr {
             }
             tmp[i] = val;
         }
-        Some(Fr(tmp))
+        CtOption::new(Fr(tmp), Choice::from(1u8))
     }
 
     fn to_repr(&self) -> Self::Repr {
@@ -345,6 +423,38 @@ impl PrimeField for Fr {
 
     fn is_odd(&self) -> Choice {
         Choice::from((self.0[0] & 1) as u8)
+    }
+}
+
+impl Debug for Fr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Fr([")
+            .and_then(|_| {
+                for (i, val) in self.0.iter().enumerate() {
+                    if i == self.0.len() - 1 {
+                        write!(f, "{:#X}", val)?;
+                    } else {
+                        write!(f, "{:#X}, ", val)?;
+                    }
+                }
+                Ok(())
+            })
+            .and_then(|_| write!(f, "])"))
+    }
+}
+
+impl Display for Fr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl From<u64> for Fr {
+    fn from(val: u64) -> Self {
+        let mut repr = [0u32; 8];
+        repr[0] = val as u32;
+        repr[1] = (val >> 32) as u32;
+        Fr(repr)
     }
 }
 
